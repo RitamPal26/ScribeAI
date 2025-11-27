@@ -1,10 +1,10 @@
 generator client {
-  provider   = "prisma-client-js" // ESM-first
+  provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
@@ -45,6 +45,7 @@ model user {
   image         String?
   createdAt     DateTime
   updatedAt     DateTime
+  sessions      Session[]
   account       account[]
   session       session[]
 }
@@ -56,4 +57,79 @@ model verification {
   expiresAt  DateTime
   createdAt  DateTime?
   updatedAt  DateTime?
+}
+
+model Session {
+  id                 String          @id @default(cuid())
+  userId             String
+  title              String          @default("Untitled Recording")
+  duration           Int             @default(0)
+  status             SessionStatus   @default(RECORDING)
+  source             RecordingSource @default(MIC)
+  fullTranscript     String?
+  recordingStartedAt DateTime        @default(now())
+  recordingEndedAt   DateTime?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  errorLogs          ErrorLog[]
+  user               user            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  summary            Summary?
+  transcripts        Transcript[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Transcript {
+  id         String   @id @default(cuid())
+  sessionId  String
+  text       String
+  chunkIndex Int
+  timestamp  Float
+  confidence Float?
+  speakerId  String?
+  createdAt  DateTime @default(now())
+  session    Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([chunkIndex])
+}
+
+model Summary {
+  id           String   @id @default(cuid())
+  sessionId    String   @unique
+  fullSummary  String
+  keyPoints    Json
+  actionItems  Json
+  decisions    Json
+  participants Int?
+  createdAt    DateTime @default(now())
+  session      Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+}
+
+model ErrorLog {
+  id         String   @id @default(cuid())
+  sessionId  String
+  errorType  String
+  message    String
+  stackTrace String?
+  createdAt  DateTime @default(now())
+  session    Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+}
+
+enum SessionStatus {
+  RECORDING
+  PAUSED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum RecordingSource {
+  MIC
+  TAB_SHARE
 }
