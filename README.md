@@ -6,9 +6,8 @@ An AI-Powered Audio Scribing and Meeting Transcription App.
 
 - ✅ **Next.js 16** with App Router
 - ✅ **Better Auth** for authentication
-- ✅ **Prisma** for database management (Rust-Free Engine)
+- ✅ **Prisma** for database management 
 - ✅ **shadcn/ui** for UI components
-- ✅ **Dashboard** for authenticated users
 - ✅ TypeScript support
 
 ## 📦 Installation
