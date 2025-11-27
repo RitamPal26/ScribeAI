@@ -4,6 +4,110 @@ import { useRecordingStore } from "@/stores/recordingStore";
 
 const CHUNK_DURATION_MS = 20000; // 20 seconds
 
+/**
+ * Convert WebM blob to WAV format using AudioContext
+ */
+async function convertWebMToWAV(webmBlob: Blob): Promise<Blob> {
+  try {
+    console.log("🔄 Converting WebM to WAV...");
+
+    // Create AudioContext
+    const audioContext = new (window.AudioContext ||
+      (window as any).webkitAudioContext)();
+
+    // Convert blob to array buffer
+    const arrayBuffer = await webmBlob.arrayBuffer();
+
+    // Decode audio data
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+    console.log(
+      `🔄 Audio decoded: ${audioBuffer.duration}s, ${audioBuffer.sampleRate}Hz`
+    );
+
+    // Convert to WAV
+    const wavBlob = await audioBufferToWav(audioBuffer);
+
+    console.log(`✅ Converted to WAV: ${wavBlob.size} bytes`);
+
+    // Close audio context to free resources
+    await audioContext.close();
+
+    return wavBlob;
+  } catch (error) {
+    console.error("❌ Audio conversion error:", error);
+    throw error;
+  }
+}
+
+/**
+ * Convert AudioBuffer to WAV blob
+ */
+function audioBufferToWav(audioBuffer: AudioBuffer): Blob {
+  const numberOfChannels = audioBuffer.numberOfChannels;
+  const sampleRate = audioBuffer.sampleRate;
+  const format = 1; // PCM
+  const bitDepth = 16;
+
+  const bytesPerSample = bitDepth / 8;
+  const blockAlign = numberOfChannels * bytesPerSample;
+
+  const data = [];
+  for (let i = 0; i < audioBuffer.numberOfChannels; i++) {
+    data.push(audioBuffer.getChannelData(i));
+  }
+
+  const interleaved = interleave(data);
+  const dataLength = interleaved.length * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(buffer);
+
+  // Write WAV header
+  writeString(view, 0, "RIFF");
+  view.setUint32(4, 36 + dataLength, true);
+  writeString(view, 8, "WAVE");
+  writeString(view, 12, "fmt ");
+  view.setUint32(16, 16, true); // fmt chunk size
+  view.setUint16(20, format, true);
+  view.setUint16(22, numberOfChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitDepth, true);
+  writeString(view, 36, "data");
+  view.setUint32(40, dataLength, true);
+
+  // Write audio data
+  let offset = 44;
+  for (let i = 0; i < interleaved.length; i++) {
+    const sample = Math.max(-1, Math.min(1, interleaved[i]));
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function interleave(channels: Float32Array[]): Float32Array {
+  const length = channels[0].length * channels.length;
+  const result = new Float32Array(length);
+
+  let inputIndex = 0;
+  for (let i = 0; i < channels[0].length; i++) {
+    for (let j = 0; j < channels.length; j++) {
+      result[inputIndex++] = channels[j][i];
+    }
+  }
+
+  return result;
+}
+
+function writeString(view: DataView, offset: number, string: string): void {
+  for (let i = 0; i < string.length; i++) {
+    view.setUint8(offset + i, string.charCodeAt(i));
+  }
+}
+
 export function useRecording() {
   const { emit, on, isConnected } = useSocket();
   const store = useRecordingStore();

@@ -93,7 +93,7 @@ export function SignupForm({
                   value={fullname}
                   id="name"
                   type="text"
-                  placeholder="Achour Meguenni"
+                  placeholder="Ritam Pal"
                   required
                 />
               </div>
@@ -104,7 +104,7 @@ export function SignupForm({
                   value={email}
                   id="email"
                   type="email"
-                  placeholder="me@example.com"
+                  placeholder="1234@example.com"
                   required
                 />
               </div>

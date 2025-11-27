@@ -6,6 +6,8 @@ import {
   logError,
 } from "../services/sessionService";
 import { processAudioChunk } from "../services/audioProcessor";
+import { generateSummary } from "../services/audioProcessor";
+import { PrismaClient } from "@prisma/client";
 
 interface StartRecordingData {
   source: "MIC" | "TAB_SHARE";
@@ -22,6 +24,8 @@ interface AudioChunkData {
 interface SessionControlData {
   sessionId: string;
 }
+
+const prisma = new PrismaClient();
 
 export function registerRecordingHandlers(io: SocketIOServer, socket: Socket) {
   // Start recording
@@ -172,23 +176,101 @@ export function registerRecordingHandlers(io: SocketIOServer, socket: Socket) {
         );
 
         // Update session status and duration
-        await updateSessionStatus(sessionId, "COMPLETED"); // ← Go straight to COMPLETED
+        await updateSessionStatus(sessionId, "PROCESSING");
         await updateSessionDuration(sessionId, duration);
 
-        // Notify client it's completed
+        // Notify client processing started
         io.to(`session-${sessionId}`).emit("recording-status", {
-          status: "COMPLETED",
+          status: "PROCESSING",
           sessionId,
           timestamp: new Date(),
         });
 
-        console.log(`✅ Session ${sessionId} marked as completed`);
+        // Generate summary in background (don't block response)
+        (async () => {
+          try {
+            console.log(
+              `🤖 Starting summary generation for session ${sessionId}...`
+            );
 
-        // NOW leave room (after emitting)
+            // Get all transcripts for this session
+            const transcripts = await prisma.transcript.findMany({
+              where: { sessionId },
+              orderBy: { chunkIndex: "asc" },
+            });
+
+            // Combine transcripts
+            const fullTranscript = transcripts.map((t) => t.text).join(" ");
+
+            console.log(
+              `📝 Full transcript length: ${fullTranscript.length} characters`
+            );
+
+            // Generate summary using Gemini
+            const summaryData = await generateSummary(
+              sessionId,
+              fullTranscript
+            );
+
+            // Save summary to database
+            await prisma.summary.create({
+              data: {
+                sessionId,
+                fullSummary: summaryData.fullSummary,
+                keyPoints: summaryData.keyPoints,
+                actionItems: summaryData.actionItems,
+                decisions: summaryData.decisions,
+              },
+            });
+
+            // Update session with full transcript and mark completed
+            await prisma.recordingSession.update({
+              where: { id: sessionId },
+              data: {
+                fullTranscript,
+                status: "COMPLETED",
+              },
+            });
+
+            console.log(
+              `✅ Summary generated and saved for session ${sessionId}`
+            );
+
+            // Notify client that processing is complete
+            io.to(`session-${sessionId}`).emit("recording-status", {
+              status: "COMPLETED",
+              sessionId,
+              timestamp: new Date(),
+            });
+
+            // Send summary to client
+            io.to(`session-${sessionId}`).emit("summary-generated", {
+              sessionId,
+              summary: summaryData,
+            });
+          } catch (summaryError) {
+            console.error(
+              `❌ Error generating summary for session ${sessionId}:`,
+              summaryError
+            );
+
+            // Mark as completed even if summary fails
+            await updateSessionStatus(sessionId, "COMPLETED");
+            await logError(sessionId, "SUMMARY_GENERATION_ERROR", summaryError);
+
+            io.to(`session-${sessionId}`).emit("recording-status", {
+              status: "COMPLETED",
+              sessionId,
+              timestamp: new Date(),
+            });
+          }
+        })();
+
+        // NOW leave room (after starting background processing)
         socket.leave(`session-${sessionId}`);
         socket.data.currentSessionId = null;
 
-        // Send success response to client
+        // Send success response to client immediately
         callback({ success: true });
       } catch (error) {
         console.error("Error stopping recording:", error);

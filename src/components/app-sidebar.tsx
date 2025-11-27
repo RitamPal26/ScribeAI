@@ -134,11 +134,6 @@ const data = {
       url: "/",
       icon: IconHome,
     },
-    {
-      title: "Clone Repository",
-      url: "https://github.com/Achour/nextjs-better-auth",
-      icon: IconCopy,
-    },
   ],
   documents: [
     // {

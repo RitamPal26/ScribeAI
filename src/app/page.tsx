@@ -23,7 +23,7 @@ export default async function page() {
         <div className="container  flex h-16 items-center justify-between">
           <div className="flex items-center ">
             {/* <Lock size={24} className="text-primary" /> */}
-            <span className="font-bold text-xl">Better-Auth</span>
+            <span className="font-bold text-xl"></span>
           </div>
           <nav className="flex items-center gap-6">
             <div className="flex items-center gap-2">
@@ -46,12 +46,6 @@ export default async function page() {
                   </Link> */}
                 </>
               )}
-              <Link target="_blank" href="https://buymeacoffee.com/achour">
-                <Button className="bg-yellow-400 text-black" size="sm">
-                  <Coffee />
-                  Buy me a coffee
-                </Button>
-              </Link>
             </div>
           </nav>
         </div>
@@ -63,56 +57,40 @@ export default async function page() {
           <IconShieldCheckFilled size={64} className="text-primary" />
           <h1 className="text-4xl md:text-6xl font-bold tracking-tight max-w-3xl">
             {/* //Modern Authentication for Next.js Applications */}
-            Next.js + Better Auth + Prisma Starter Kit
+            ScribeAI
           </h1>
           <p className="text-lg text-muted-foreground max-w-2xl">
-            Better-Auth is a complete authentication solution for your Next.js
-            projects, powered by Prisma and styled with Shadcn UI components.
+            AI-Powered Audio Scribing and Meeting Transcription App designed for
+            professionals seeking accurate and efficient documentation of their
+            meetings.
           </p>
           <div className="flex gap-4 mt-4">
             <a
               target="_blank"
-              href="https://github.com/Achour/nextjs-better-auth"
-            >
-              <Button size="lg" className="gap-2">
-                Clone Repository <IconChevronRight size={18} />
-              </Button>
-            </a>
-            <Link href="/login">
-              <Button size="lg" variant="outline">
-                Try Demo
-              </Button>
-            </Link>
+              href="https://github.com/RitamPal26/ScribeAI"
+            ></a>
+            <Link href="/login"></Link>
           </div>
         </div>
       </section>
 
       {/* CTA section */}
-
-      {/* Footer */}
       <footer className="border-t py-10 mt-auto">
         <div className="container flex flex-col md:flex-row justify-between items-center gap-6">
           <div className="flex items-center gap-2">
             <IconLockSquareRoundedFilled size={20} className="text-primary" />
-            <span className="font-bold">Auth Starter Kit</span>
+            <span className="font-bold">Free to Use !!</span>
           </div>
           <div className="flex gap-8">
             <a
-              href="https://github.com/achour"
+              href="https://github.com/RitamPal26/ScribeAI"
               target="_blank"
               className="text-sm text-muted-foreground hover:text-foreground"
             >
               Github
             </a>
             <a
-              href="https://www.achour.dev"
-              target="_blank"
-              className="text-sm text-muted-foreground hover:text-foreground"
-            >
-              Portfolio
-            </a>
-            <a
-              href="https://x.com/achourdev"
+              href="https://x.com/JuniorDev26"
               target="_blank"
               className="text-sm text-muted-foreground hover:text-foreground"
             >
@@ -120,7 +98,7 @@ export default async function page() {
             </a>
           </div>
           <div className="text-sm text-muted-foreground">
-            © {new Date().getFullYear()} Achour Meguenni
+            © {new Date().getFullYear()} Ritam Pal
           </div>
         </div>
       </footer>
