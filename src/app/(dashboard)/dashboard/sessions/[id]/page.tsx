@@ -331,7 +331,7 @@ ${transcriptText}`.trim();
               </div>
             ) : (
               <div className="flex items-start gap-2">
-                <h1 className="text-2xl sm:text-3xl font-bold break-words">
+                <h1 className="text-2xl sm:text-3xl font-bold wrap-break-words">
                   {session.title}
                 </h1>
                 <Button
