@@ -39,3 +39,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Windows System Files (Since you are on Windows)
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# IDE Settings
+.vscode/
+.idea/
+
+# pnpm misconfigured directory
+%USERPROFILE%/

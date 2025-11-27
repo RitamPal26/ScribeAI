@@ -1,10 +1,6 @@
-# Next.js + Better Auth + Prisma Starter Kit
+# ScribAI
 
-🚀 A starter kit for building modern web applications with **Next.js 16**, **Better Auth**, **Prisma**, and **shadcn/ui**.
-
-🔗 **[Live Demo](https://auth.achour.dev/)**
-
-<a href="https://www.buymeacoffee.com/achour" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+An AI-Powered Audio Scribing and Meeting Transcription App.
 
 ## 📌 Features
 
@@ -19,7 +15,7 @@
 
 1. Clone the repository:
    ```sh
-   git clone https://github.com/Achour/nextjs-better-auth.git
+   git clone https://github.com/RitamPal26/ScribeAI.git
    cd nextjs-better-auth
    ```
 2. Install dependencies:
@@ -61,4 +57,3 @@
 
 ---
 
-Made with ❤️ by [Achour Meguenni](https://github.com/Achour)
