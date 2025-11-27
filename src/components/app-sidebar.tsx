@@ -54,11 +54,16 @@ const data = {
       url: "/dashboard/setting",
       icon: IconSettings,
     },
-    // {
-    //   title: "Lifecycle",
-    //   url: "#",
-    //   icon: IconListDetails,
-    // },
+    {
+      title: "Record",
+      url: "/dashboard/record",
+      icon: IconCamera,
+    },
+    {
+      title: "Sessions",
+      url: "/dashboard/sessions",
+      icon: IconFolder,
+    },
     // {
     //   title: "Analytics",
     //   url: "#",
