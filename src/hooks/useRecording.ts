@@ -16,14 +16,12 @@ export function useRecording() {
 
   const [permissionStatus, setPermissionStatus] = useState<
     "granted" | "denied" | "prompt"
-  >("prompt");
+  >("prompt"); // --- 1. SEND AUDIO CHUNK (Stable & Fresh State) ---
 
-  // --- 1. SEND AUDIO CHUNK (Stable & Fresh State) ---
   const sendAudioChunk = useCallback(async () => {
     // Read fresh state directly to avoid stale closures in setInterval
-    const state = useRecordingStore.getState();
+    const state = useRecordingStore.getState(); // Safety checks
 
-    // Safety checks
     if (!state.sessionId || state.status !== "recording") return;
 
     const currentChunks = chunksBufferRef.current;
@@ -35,9 +33,8 @@ export function useRecording() {
 
       const webmBlob = new Blob(currentChunks, {
         type: "audio/webm;codecs=opus",
-      });
+      }); // Clear buffer immediately
 
-      // Clear buffer immediately
       chunksBufferRef.current = [];
 
       const arrayBuffer = await webmBlob.arrayBuffer();
@@ -49,49 +46,42 @@ export function useRecording() {
           chunk: rawBytes,
           chunkIndex: state.chunksSent,
           timestamp: state.elapsedTime,
-        });
+        }); // Update store
 
-        // Update store
         state.incrementChunksSent();
       } catch (error) {
         console.error("❌ Send error:", error);
       }
     }
-  }, [emit]);
+  }, [emit]); // --- 2. ROBUST CLEANUP HELPER (New) ---
 
-  // --- 2. ROBUST CLEANUP HELPER (New) ---
   const cleanupMedia = useCallback(async () => {
-    console.log("🧹 Cleaning up media streams...");
+    console.log("🧹 Cleaning up media streams..."); // 1. Stop the interval timer
 
-    // 1. Stop the interval timer
     if (chunkTimerRef.current) {
       clearInterval(chunkTimerRef.current);
       chunkTimerRef.current = null;
-    }
+    } // 2. Stop the MediaRecorder
 
-    // 2. Stop the MediaRecorder
     if (
       mediaRecorderRef.current &&
       mediaRecorderRef.current.state !== "inactive"
     ) {
       mediaRecorderRef.current.stop();
     }
-    mediaRecorderRef.current = null;
+    mediaRecorderRef.current = null; // 3. Stop all audio tracks explicitly (Mic or Tab)
 
-    // 3. Stop all audio tracks explicitly (Mic or Tab)
     if (audioStreamRef.current) {
       audioStreamRef.current.getTracks().forEach((track) => {
         track.stop();
         console.log(`❌ Track stopped: ${track.label}`);
       });
       audioStreamRef.current = null;
-    }
+    } // 4. Clear buffers
 
-    // 4. Clear buffers
     chunksBufferRef.current = [];
-  }, []);
+  }, []); // --- 3. SOCKET LISTENERS ---
 
-  // --- 3. SOCKET LISTENERS ---
   useEffect(() => {
     const handleTranscription = (data: any) => {
       console.log("📥 [UI] Received live transcription:", data.text);
@@ -123,9 +113,8 @@ export function useRecording() {
       }
     });
     return cleanup;
-  }, [on, store]);
+  }, [on, store]); // --- 4. ELAPSED TIME TIMER ---
 
-  // --- 4. ELAPSED TIME TIMER ---
   useEffect(() => {
     if (store.status === "recording") {
       timerIntervalRef.current = setInterval(() => {
@@ -140,9 +129,8 @@ export function useRecording() {
     return () => {
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     };
-  }, [store.status, store]);
+  }, [store.status, store]); // --- 5. PERMISSIONS & STREAMS ---
 
-  // --- 5. PERMISSIONS & STREAMS ---
   const requestPermission = useCallback(async (): Promise<boolean> => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -151,8 +139,7 @@ export function useRecording() {
           noiseSuppression: true,
           autoGainControl: true,
         },
-      });
-      // Immediately stop this test stream
+      }); // Immediately stop this test stream
       stream.getTracks().forEach((track) => track.stop());
       setPermissionStatus("granted");
       return true;
@@ -188,22 +175,18 @@ export function useRecording() {
         throw new Error("No audio source found.");
       throw new Error("Failed to capture tab audio: " + error.message);
     }
-  }
+  } // --- 6. STOP RECORDING ---
 
-  // --- 6. STOP RECORDING ---
   const stopRecording = useCallback(async () => {
     try {
-      console.log("🛑 Stopping recording...");
+      console.log("🛑 Stopping recording..."); // 1. Send whatever is left in the buffer BEFORE cleaning up media
 
-      // 1. Send whatever is left in the buffer BEFORE cleaning up media
-      await sendAudioChunk();
+      await sendAudioChunk(); // 2. Stop Timer in Store
 
-      // 2. Stop Timer in Store
       const state = useRecordingStore.getState();
       store.stopTimer();
-      store.setStatus("processing");
+      store.setStatus("processing"); // 3. Tell Backend to stop
 
-      // 3. Tell Backend to stop
       if (state.sessionId) {
         try {
           const response: any = await emit("stop-recording", {
@@ -223,12 +206,10 @@ export function useRecording() {
       console.error("Error stopping:", error);
       store.setStatus("error");
     } finally {
-      // ✅ FIX: Nuclear cleanup ensures browser releases the Mic/Tab
       await cleanupMedia();
     }
-  }, [emit, store, sendAudioChunk, cleanupMedia]);
+  }, [emit, store, sendAudioChunk, cleanupMedia]); // --- 7. START RECORDING ---
 
-  // --- 7. START RECORDING ---
   const startRecording = useCallback(
     async (source: "MIC" | "TAB_SHARE" = "MIC") => {
       try {
@@ -236,9 +217,6 @@ export function useRecording() {
 
         let stream: MediaStream | null = null;
 
-        // 🚨 CRITICAL FIX: Get the stream FIRST.
-        // If we await cleanupMedia() first, the browser loses the "User Click" context
-        // and blocks the "Share Screen" popup.
         if (source === "TAB_SHARE") {
           try {
             stream = await getTabAudioStream();
@@ -247,14 +225,10 @@ export function useRecording() {
             console.warn("Tab selection cancelled");
             return;
           }
-        }
+        } // ✅ NOW we can safely clean up the old session // (This stops the old Mic tracks/recorder)
 
-        // ✅ NOW we can safely clean up the old session
-        // (This stops the old Mic tracks/recorder)
-        await cleanupMedia();
+        await cleanupMedia(); // If we chose MIC, we get the stream AFTER cleanup // (Mic doesn't suffer from the same strict "User Gesture" timeout as Screen Share)
 
-        // If we chose MIC, we get the stream AFTER cleanup
-        // (Mic doesn't suffer from the same strict "User Gesture" timeout as Screen Share)
         if (source === "MIC") {
           const hasPermission = await requestPermission();
           if (!hasPermission) return;
@@ -267,12 +241,10 @@ export function useRecording() {
           });
         }
 
-        if (!stream) throw new Error("No stream available");
+        if (!stream) throw new Error("No stream available"); // Assign the new stream to the Ref so we can track it
 
-        // Assign the new stream to the Ref so we can track it
-        audioStreamRef.current = stream;
+        audioStreamRef.current = stream; // Handle stream ending (e.g. user clicks "Stop Sharing" in browser UI)
 
-        // Handle stream ending (e.g. user clicks "Stop Sharing" in browser UI)
         stream.getAudioTracks()[0].onended = () => {
           if (useRecordingStore.getState().status === "recording") {
             stopRecording();
@@ -334,9 +306,8 @@ export function useRecording() {
       cleanupMedia,
       getTabAudioStream,
     ]
-  );
+  ); // --- 8. PAUSE / RESUME ---
 
-  // --- 8. PAUSE / RESUME ---
   const pauseRecording = useCallback(async () => {
     const state = useRecordingStore.getState();
     if (!state.sessionId) return;
@@ -368,9 +339,8 @@ export function useRecording() {
     await emit("resume-recording", { sessionId: state.sessionId });
     store.setStatus("recording");
     store.resumeTimer();
-  }, [emit, store, sendAudioChunk]);
+  }, [emit, store, sendAudioChunk]); // Cleanup on unmount
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       cleanupMedia(); // ✅ FIX: Clean up on unmount
