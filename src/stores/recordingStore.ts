@@ -17,27 +17,22 @@ interface TranscriptChunk {
 }
 
 interface RecordingState {
-  // Recording state
   status: RecordingStatus;
   sessionId: string | null;
   source: RecordingSource;
 
-  // Timer
   startTime: number | null;
   pausedTime: number;
   elapsedTime: number;
+  accumulatedTime: number;
 
-  // Transcription
   transcriptChunks: TranscriptChunk[];
   fullTranscript: string;
 
-  // Audio chunks tracking
   chunksSent: number;
 
-  // Error handling
   error: string | null;
 
-  // Actions
   setStatus: (status: RecordingStatus) => void;
   setSessionId: (sessionId: string | null) => void;
   setSource: (source: RecordingSource) => void;
@@ -66,6 +61,7 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
   startTime: null,
   pausedTime: 0,
   elapsedTime: 0,
+  accumulatedTime: 0,
 
   transcriptChunks: [],
   fullTranscript: "",
@@ -87,60 +83,48 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
   startTimer: () =>
     set({
       startTime: Date.now(),
-      pausedTime: 0,
+      accumulatedTime: 0,
       elapsedTime: 0,
     }),
 
   pauseTimer: () => {
-    const { startTime, pausedTime } = get();
+    const { startTime, accumulatedTime } = get();
     if (startTime) {
-      const elapsed = Date.now() - startTime - pausedTime;
+      const currentSegment = Date.now() - startTime;
       set({
-        pausedTime:
-          pausedTime + (Date.now() - startTime - pausedTime - elapsed),
+        startTime: null,
+        accumulatedTime: accumulatedTime + currentSegment, // Save progress
       });
     }
   },
 
   resumeTimer: () => {
-    const { pausedTime } = get();
-    set({ startTime: Date.now() - pausedTime });
+    set({ startTime: Date.now() });
   },
 
   stopTimer: () => {
-    const { startTime, pausedTime } = get();
-    if (startTime) {
-      const elapsed = Math.floor((Date.now() - startTime - pausedTime) / 1000);
-      set({
-        elapsedTime: elapsed,
-        startTime: null,
-        pausedTime: 0,
-      });
-    }
+    set({ startTime: null, accumulatedTime: 0 }); // Freezes elapsed time as is
   },
 
   updateElapsedTime: () => {
-    const { startTime, pausedTime } = get();
+    const { startTime, accumulatedTime } = get();
     if (startTime) {
-      const elapsed = Math.floor((Date.now() - startTime - pausedTime) / 1000);
-      set({ elapsedTime: elapsed });
+      const currentSegment = Date.now() - startTime;
+      const totalMs = accumulatedTime + currentSegment;
+      set({ elapsedTime: Math.floor(totalMs / 1000) });
     }
   },
 
-  // ✅ FIX: Prevent duplicates here
   addTranscriptChunk: (chunk) =>
     set((state) => {
-      // 1. Check if we already have this chunkIndex
       const exists = state.transcriptChunks.some(
         (c) => c.chunkIndex === chunk.chunkIndex
       );
 
-      // 2. If it exists, ignore it (return current state)
       if (exists) {
         return state;
       }
 
-      // 3. If new, add it and sort
       const newChunks = [...state.transcriptChunks, chunk].sort(
         (a, b) => a.chunkIndex - b.chunkIndex
       );
@@ -173,6 +157,7 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
       startTime: null,
       pausedTime: 0,
       elapsedTime: 0,
+      source: "MIC",
       transcriptChunks: [],
       fullTranscript: "",
       chunksSent: 0,
