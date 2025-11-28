@@ -1,225 +1,171 @@
 import { addTranscript } from "./sessionService";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+// 1. Import Native Google SDK (Best for Audio)
+import { 
+  GoogleGenerativeAI, 
+  HarmCategory, 
+  HarmBlockThreshold 
+} from "@google/generative-ai";
 
+// 2. Import Vercel AI SDK (Best for JSON Summaries)
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { generateObject } from 'ai';
+import { z } from 'zod'; 
+import { Server } from 'socket.io';
+
+// --- Configuration ---
+const apiKey = process.env.GEMINI_API_KEY || "";
+
+// Setup Native Client (For Audio)
+const nativeGenAI = new GoogleGenerativeAI(apiKey);
+
+// Use 1.5-flash (Standard efficient model)
+const nativeModel = nativeGenAI.getGenerativeModel({ 
+  model: "gemini-2.5-flash",
+  // CRITICAL: Disable safety filters so it doesn't block "bad words" in transcription
+  safetySettings: [
+    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  ]
+});
+
+// Setup Vercel Client (For Summary)
+const vercelGoogle = createGoogleGenerativeAI({ apiKey });
+const vercelModel = vercelGoogle('gemini-2.5-flash');
+
+// --- Types ---
 interface TranscriptionResult {
   text: string;
   confidence?: number;
-  speakerId?: string;
 }
 
-// Initialize Gemini AI
-const apiKey = process.env.GEMINI_API_KEY;
-if (!apiKey) {
-  console.warn(
-    "⚠️ Warning: GEMINI_API_KEY is not set in environment variables."
-  );
-}
-const genAI = new GoogleGenerativeAI(apiKey || "");
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-002" });
-
-/**
- * Process audio chunk and return transcription using Gemini API
- */
-export async function processAudioChunk(
-  sessionId: string,
-  audioChunk: Buffer,
-  chunkIndex: number,
-  timestamp: number
-): Promise<TranscriptionResult> {
-  try {
-    console.log(
-      `Processing audio chunk ${chunkIndex} for session ${sessionId}`
-    );
-    console.log(
-      `Chunk size: ${audioChunk.length} bytes, Timestamp: ${timestamp}s`
-    );
-
-    // ADD THESE DEBUG LOGS:
-    console.log("🔍 First 50 bytes:", audioChunk.slice(0, 50).toString("hex"));
-    console.log("🔍 Checking if valid WAV header...");
-
-    // Check for WAV header (should start with "RIFF")
-    const header = audioChunk.slice(0, 4).toString("ascii");
-    console.log("🔍 Audio header:", header);
-
-    if (header !== "RIFF") {
-      console.warn("⚠️ Not a valid WAV file! Header:", header);
-    }
-
-    // Validate chunk
-    validateAudioChunk(audioChunk);
-
-    // Convert buffer to base64 for Gemini
-    const base64Audio = audioChunk.toString("base64");
-
-    // Prepare audio for Gemini API
-    const audioPart = {
-      inlineData: {
-        data: base64Audio,
-        mimeType: "audio/wav", // Browser records in WebM format
-      },
-    };
-
-    // Create transcription prompt
-    const prompt = `Transcribe this audio clip accurately. 
-    
-Rules:
-- Return ONLY the transcription text, no additional commentary
-- If multiple speakers are detected, use "Speaker 1:", "Speaker 2:" labels
-- If audio is unclear or silent, return "[UNCLEAR]" or "[SILENCE]"
-- Maintain proper punctuation and capitalization
-- Do not add any explanations or metadata
-
-Transcription:`;
-
-    console.log(`📤 Sending chunk ${chunkIndex} to Gemini API...`);
-
-    // Call Gemini API with timeout
-    const result = (await Promise.race([
-      model.generateContent([prompt, audioPart]),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Gemini API timeout")), 30000)
-      ),
-    ])) as any;
-
-    const response = result.response;
-    const transcriptionText = response.text().trim();
-
-    console.log(
-      `✅ Gemini transcription for chunk ${chunkIndex}:`,
-      transcriptionText.substring(0, 100)
-    );
-
-    // Calculate mock confidence (Gemini doesn't provide this directly)
-    const confidence = transcriptionText.length > 0 ? 0.9 : 0.5;
-
-    // Save transcript to database
-    await addTranscript(
-      sessionId,
-      transcriptionText,
-      chunkIndex,
-      timestamp,
-      confidence
-    );
-
-    console.log("✅ Transcript saved to DB");
-
-    return {
-      text: transcriptionText,
-      confidence,
-    };
-  } catch (error) {
-    console.error("❌ Error processing audio chunk:", error);
-
-    // Fallback to mock transcription on error
-    const fallbackText = `[Transcription failed for chunk ${chunkIndex}]`;
-
-    // Note: We use 0.0 confidence to indicate failure
-    await addTranscript(sessionId, fallbackText, chunkIndex, timestamp, 0.0);
-
-    return {
-      text: fallbackText,
-      confidence: 0.0,
-    };
-  }
-}
-
-/**
- * Generate summary from full transcript using Gemini
- */
-export async function generateSummary(
-  sessionId: string,
-  fullTranscript: string
-): Promise<{
+interface SummaryResult {
   fullSummary: string;
   keyPoints: string[];
   actionItems: string[];
   decisions: string[];
-}> {
-  try {
-    console.log(`📝 Generating summary for session ${sessionId}...`);
-
-    const summaryPrompt = `Analyze the following transcript and provide a structured summary.
-
-Transcript:
-${fullTranscript}
-
-Provide your response in the following JSON format (return ONLY valid JSON, no additional text):
-{
-  "fullSummary": "A comprehensive 2-3 sentence summary of the main topics discussed",
-  "keyPoints": ["Key point 1", "Key point 2", "Key point 3"],
-  "actionItems": ["Action item 1", "Action item 2"],
-  "decisions": ["Decision 1", "Decision 2"]
 }
 
-Rules:
-- If no action items exist, return empty array
-- If no decisions were made, return empty array
-- Keep key points concise (1 sentence each)
-- Return ONLY the JSON object, nothing else`;
+let io: Server | null = null;
 
-    // Added generation config to encourage JSON output
-    const result = await model.generateContent({
-      contents: [{ role: "user", parts: [{ text: summaryPrompt }] }],
-      generationConfig: { responseMimeType: "application/json" },
-    });
+export function setSocketIOInstance(socketIOInstance: Server) {
+  io = socketIOInstance;
+}
 
-    const response = result.response.text().trim();
-
-    console.log("📝 Raw Gemini summary response:", response.substring(0, 200));
-
-    // Parse JSON response
-    let summaryData;
-    try {
-      // FIX: Corrected the regex logic to clean markdown code blocks
-      const jsonText = response
-        .replace(/```json/g, "")
-        .replace(/```/g, "")
-        .trim();
-
-      summaryData = JSON.parse(jsonText);
-    } catch (parseError) {
-      console.error("❌ Failed to parse Gemini JSON response:", parseError);
-
-      // Fallback summary structure
-      summaryData = {
-        fullSummary: response.substring(0, 500),
-        keyPoints: ["Summary generation encountered parsing issues"],
-        actionItems: [],
-        decisions: [],
-      };
+// --- Audio Processing (Using NATIVE SDK for stability) ---
+export async function processAudioChunk(
+  sessionId: string,
+  audioChunk: Buffer | any, 
+  chunkIndex: number,
+  timestamp: number
+): Promise<TranscriptionResult> {
+  try {
+    // 1. ROBUST BUFFER CONVERSION
+    let finalBuffer: Buffer;
+    if (Buffer.isBuffer(audioChunk)) {
+        finalBuffer = audioChunk;
+    } else if (Array.isArray(audioChunk)) {
+        finalBuffer = Buffer.from(audioChunk);
+    } else if (audioChunk && audioChunk.type === 'Buffer' && Array.isArray(audioChunk.data)) {
+        finalBuffer = Buffer.from(audioChunk.data);
+    } else {
+        finalBuffer = Buffer.from(audioChunk);
     }
 
-    console.log("✅ Summary generated successfully");
+    console.log(
+      `🔍 [CHUNK ${chunkIndex}] Processing ${finalBuffer.length} bytes`
+    );
 
-    return summaryData;
-  } catch (error) {
-    console.error("❌ Error generating summary:", error);
+    // 2. Convert to Base64
+    const base64Audio = finalBuffer.toString("base64");
 
-    // Return fallback summary
-    return {
-      fullSummary:
-        "Summary generation failed. Please review the transcript manually.",
-      keyPoints: ["Error generating summary"],
-      actionItems: [],
-      decisions: [],
+    // 3. Native SDK Call 
+    const audioPart = {
+      inlineData: {
+        data: base64Audio,
+        mimeType: "audio/webm;codecs=opus", 
+      },
     };
+
+    // Prompt optimized for verbatim transcription
+    const prompt = `Transcribe this audio clip exactly as spoken. Do not add timestamps. Do not add markdown. Do not add speaker labels. Return ONLY the text.`;
+
+    const result = await nativeModel.generateContent([prompt, audioPart]);
+    const transcriptionText = result.response.text().trim();
+
+    console.log(`✅ [CHUNK ${chunkIndex}] Gemini: "${transcriptionText}"`);
+
+    // Only save if there is actual text (Gemini sometimes returns empty strings for silence)
+    if (transcriptionText.length > 0) {
+        await addTranscript(
+          sessionId,
+          transcriptionText,
+          chunkIndex,
+          timestamp,
+          0.95
+        );
+    }
+
+    return { text: transcriptionText, confidence: 0.95 };
+
+  } catch (error: any) {
+    console.error(`❌ [CHUNK ${chunkIndex}] Audio Error:`, error.message);
+    
+    // Optional: Log failure to DB, but don't break the UI
+    const fallback = ``; // Return empty string on fail so UI doesn't show "[AUDIO FAILED]"
+    
+    // We do NOT call addTranscript here, so we don't save junk data to the DB
+    
+    return { text: fallback, confidence: 0.0 };
   }
 }
 
-/**
- * Validate audio chunk format and size
- */
-export function validateAudioChunk(chunk: Buffer): boolean {
-  const MAX_CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
+// --- Summary Generation (Using VERCEL SDK for structure) ---
+export async function generateSummary(
+  sessionId: string,
+  fullTranscript: string
+): Promise<SummaryResult> {
+  try {
+    if (!fullTranscript || fullTranscript.trim().length < 20) {
+        return {
+            fullSummary: "The recording was too short or empty to generate a summary.",
+            keyPoints: [],
+            actionItems: [],
+            decisions: []
+        };
+    }
 
-  if (chunk.length === 0) {
-    throw new Error("Empty audio chunk");
+    console.log(`🧠 Generating summary for session ${sessionId}...`);
+    
+    // 4. Vercel AI SDK Call (generateObject)
+    const { object } = await generateObject({
+      model: vercelModel,
+      schema: z.object({
+        fullSummary: z.string().describe("A concise paragraph summarizing the meeting discussions"),
+        keyPoints: z.array(z.string()).describe("List of main topics discussed"),
+        actionItems: z.array(z.string()).describe("List of tasks assigned, including who is responsible if known"),
+        decisions: z.array(z.string()).describe("List of agreed-upon decisions or conclusions"),
+      }),
+      prompt: `
+        You are an expert meeting secretary. 
+        Analyze the following transcript. 
+        Extract the key information into the requested JSON structure.
+        
+        TRANSCRIPT:
+        "${fullTranscript}"
+      `,
+    });
+
+    return object;
+
+  } catch (error) {
+    console.error("Error generating summary:", error);
+    return {
+      fullSummary: "Failed to generate summary.",
+      keyPoints: [],
+      actionItems: [],
+      decisions: []
+    };
   }
-
-  if (chunk.length > MAX_CHUNK_SIZE) {
-    throw new Error(`Audio chunk too large: ${chunk.length} bytes`);
-  }
-
-  return true;
 }

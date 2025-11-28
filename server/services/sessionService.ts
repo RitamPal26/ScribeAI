@@ -1,26 +1,27 @@
-import { PrismaClient, SessionStatus, RecordingSource } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { SessionStatus, RecordingSource } from "@prisma/client";
+import { db } from "../db";
 
 export async function createSession(
   userId: string,
-  source: RecordingSource = 'MIC',
+  source: RecordingSource = RecordingSource.MIC,
   title?: string
 ) {
-  const defaultTitle = title || `Recording - ${new Date().toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })}`;
+  const defaultTitle =
+    title ||
+    `Recording - ${new Date().toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    })}`;
 
-  const session = await prisma.recordingSession.create({ // ← CHANGED
+  const session = await db.recordingSession.create({
     data: {
       userId,
       source,
       title: defaultTitle,
-      status: 'RECORDING',
+      status: SessionStatus.RECORDING,
       recordingStartedAt: new Date(),
     },
   });
@@ -34,11 +35,16 @@ export async function updateSessionStatus(
 ) {
   const updateData: any = { status };
 
-  if (status === 'PROCESSING' || status === 'COMPLETED' || status === 'FAILED') {
+  // Set recordingEndedAt if we are stopping/finishing
+  if (
+    status === SessionStatus.PROCESSING ||
+    status === SessionStatus.COMPLETED ||
+    status === SessionStatus.FAILED
+  ) {
     updateData.recordingEndedAt = new Date();
   }
 
-  return await prisma.recordingSession.update({ // ← CHANGED
+  return await db.recordingSession.update({
     where: { id: sessionId },
     data: updateData,
   });
@@ -48,7 +54,7 @@ export async function updateSessionDuration(
   sessionId: string,
   duration: number
 ) {
-  return await prisma.recordingSession.update({ // ← CHANGED
+  return await db.recordingSession.update({
     where: { id: sessionId },
     data: { duration: Math.floor(duration) },
   });
@@ -62,7 +68,7 @@ export async function addTranscript(
   confidence?: number,
   speakerId?: string
 ) {
-  return await prisma.transcript.create({
+  return await db.transcript.create({
     data: {
       sessionId,
       text,
@@ -75,18 +81,18 @@ export async function addTranscript(
 }
 
 export async function finalizeSession(sessionId: string) {
-  const transcripts = await prisma.transcript.findMany({
+  const transcripts = await db.transcript.findMany({
     where: { sessionId },
-    orderBy: { chunkIndex: 'asc' },
+    orderBy: { chunkIndex: "asc" },
   });
 
-  const fullTranscript = transcripts.map(t => t.text).join(' ');
+  const fullTranscript = transcripts.map((t) => t.text).join(" ");
 
-  return await prisma.recordingSession.update({ // ← CHANGED
+  return await db.recordingSession.update({
     where: { id: sessionId },
     data: {
       fullTranscript,
-      status: 'COMPLETED',
+      status: SessionStatus.COMPLETED,
     },
   });
 }
@@ -99,22 +105,29 @@ export async function logError(
   const message = error instanceof Error ? error.message : String(error);
   const stackTrace = error instanceof Error ? error.stack : undefined;
 
-  return await prisma.errorLog.create({
-    data: {
-      sessionId,
-      errorType,
-      message,
-      stackTrace,
-    },
-  });
+  try {
+    return await db.errorLog.create({
+      data: {
+        sessionId,
+        errorType,
+        message,
+        stackTrace,
+      },
+    });
+  } catch (e) {
+    console.error(
+      "Failed to write to ErrorLog (DB Connection likely lost):",
+      e
+    );
+  }
 }
 
 export async function getSessionById(sessionId: string) {
-  return await prisma.recordingSession.findUnique({ // ← CHANGED
+  return await db.recordingSession.findUnique({
     where: { id: sessionId },
     include: {
       transcripts: {
-        orderBy: { chunkIndex: 'asc' },
+        orderBy: { chunkIndex: "asc" },
       },
       summary: true,
       errorLogs: true,
@@ -123,9 +136,9 @@ export async function getSessionById(sessionId: string) {
 }
 
 export async function getUserSessions(userId: string) {
-  return await prisma.recordingSession.findMany({ // ← CHANGED
+  return await db.recordingSession.findMany({
     where: { userId },
-    orderBy: { createdAt: 'desc' },
+    orderBy: { createdAt: "desc" },
     include: {
       _count: {
         select: { transcripts: true },

@@ -1,9 +1,10 @@
-import { SourceSelector } from '@/components/recording/SourceSelector';
-import { RecordingStatus } from '@/components/recording/RecordingStatus';
-import { RecordingTimer } from '@/components/recording/RecordingTimer';
-import { RecordingControls } from '@/components/recording/RecordingControls';
-import { TranscriptDisplay } from '@/components/recording/TranscriptDisplay';
-import { Card } from '@/components/ui/card';
+import { SourceSelector } from "@/components/recording/SourceSelector";
+import { RecordingStatus } from "@/components/recording/RecordingStatus";
+import { RecordingTimer } from "@/components/recording/RecordingTimer";
+import { RecordingControls } from "@/components/recording/RecordingControls";
+import { TranscriptDisplay } from "@/components/recording/TranscriptDisplay";
+import { ActiveSourceIndicator } from "@/components/recording/ActiveSourceIndicator";
+import { Card } from "@/components/ui/card";
 
 export default function RecordPage() {
   return (
@@ -32,6 +33,9 @@ export default function RecordPage() {
               {/* Status */}
               <RecordingStatus />
 
+              {/* Active Source Indicator */}
+              <ActiveSourceIndicator />
+
               {/* Timer */}
               <RecordingTimer />
 
@@ -49,7 +53,8 @@ export default function RecordPage() {
         {/* Info Footer */}
         <div className="mt-8 sm:mt-12 text-center text-xs sm:text-sm text-muted-foreground space-y-2">
           <p>
-            💡 Tip: Audio is processed in 20-second chunks for real-time transcription
+            💡 Tip: Audio is processed in 20-second chunks for real-time
+            transcription
           </p>
           <p className="text-xs">
             Make sure to allow microphone permissions when prompted
