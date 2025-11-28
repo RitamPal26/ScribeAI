@@ -2,8 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useSocket } from "./useSocket";
 import { useRecordingStore } from "@/stores/recordingStore";
 
-// UPDATED: Changed to 18 seconds as requested
-const CHUNK_DURATION_MS = 18000;
+const CHUNK_DURATION_MS = 5000;
 
 export function useRecording() {
   const { emit, on, isConnected } = useSocket();
@@ -19,8 +18,56 @@ export function useRecording() {
     "granted" | "denied" | "prompt"
   >("prompt");
 
-  // --- 1. FIXED TRANSCRIPTION LISTENER ---
-  // Matches the server event 'transcription-update' and fixes the cleanup logic
+  // --- 1. SEND AUDIO CHUNK (Fixed: Moved into a function) ---
+  const sendAudioChunk = useCallback(async () => {
+    // Safety checks
+    if (!store.sessionId || store.status !== "recording") return;
+
+    const currentChunks = chunksBufferRef.current;
+
+    if (currentChunks.length > 0) {
+      console.log(
+        `📤 Sending chunk #${store.chunksSent} (${currentChunks.length} fragments)`
+      );
+
+      // Create a single Blob from the accumulated 1-second slices
+      const webmBlob = new Blob(currentChunks, {
+        type: "audio/webm;codecs=opus",
+      });
+
+      // Clear buffer immediately to prevent double-sending
+      chunksBufferRef.current = [];
+
+      const arrayBuffer = await webmBlob.arrayBuffer();
+
+      // FIX: 'Buffer' is not available in the browser. Use Uint8Array.
+      // Socket.io handles Uint8Array perfectly.
+      const rawBytes = new Uint8Array(arrayBuffer);
+
+      try {
+        await emit("audio-chunk", {
+          sessionId: store.sessionId,
+          chunk: rawBytes, // Send raw browser bytes
+          chunkIndex: store.chunksSent,
+          timestamp: store.elapsedTime,
+        });
+        store.incrementChunksSent();
+      } catch (error) {
+        console.error("❌ Send error:", error);
+        // Optional: Push chunks back to buffer if failed?
+        // For now, we log it to avoid memory leaks.
+      }
+    }
+  }, [
+    store.sessionId,
+    store.status,
+    store.chunksSent,
+    store.elapsedTime,
+    emit,
+    store,
+  ]);
+
+  // --- 2. SOCKET LISTENERS ---
   useEffect(() => {
     const handleTranscription = (data: any) => {
       console.log("📥 [UI] Received live transcription:", data.text);
@@ -32,27 +79,32 @@ export function useRecording() {
       });
     };
 
-    // Assuming 'on' returns a cleanup function (standard hook pattern)
-    // If your useSocket doesn't return a cleanup, you might need store.off(...)
+    // Use the cleanup function returned by 'on'
     const cleanup = on("transcription-update", handleTranscription);
 
     return () => {
-      cleanup && cleanup(); // Correct cleanup
+      cleanup && cleanup();
     };
   }, [on, store]);
 
-  // Listen for recording status updates
   useEffect(() => {
     const cleanup = on("recording-status", (data: any) => {
       console.log("📶 Recording status:", data);
       if (data.status) {
-        store.setStatus(data.status.toLowerCase());
+        // Map backend status to frontend status if needed, or use directly
+        const statusMap: Record<string, string> = {
+          RECORDING: "recording",
+          PAUSED: "paused",
+          COMPLETED: "completed",
+          PROCESSING: "processing",
+        };
+        store.setStatus(statusMap[data.status] || "idle");
       }
     });
     return cleanup;
   }, [on, store]);
 
-  // UI Timer updater
+  // --- 3. ELAPSED TIME TIMER ---
   useEffect(() => {
     if (store.status === "recording") {
       timerIntervalRef.current = setInterval(() => {
@@ -69,7 +121,7 @@ export function useRecording() {
     };
   }, [store.status, store]);
 
-  // Request microphone permission
+  // --- 4. PERMISSIONS & STREAMS ---
   const requestPermission = useCallback(async (): Promise<boolean> => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -79,6 +131,7 @@ export function useRecording() {
           autoGainControl: true,
         },
       });
+      // We just wanted to check permission, so we stop this test stream immediately
       stream.getTracks().forEach((track) => track.stop());
       setPermissionStatus("granted");
       return true;
@@ -93,7 +146,7 @@ export function useRecording() {
   async function getTabAudioStream(): Promise<MediaStream> {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
+        video: true, // DisplayMedia requires video: true primarily
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -106,7 +159,10 @@ export function useRecording() {
         throw new Error('No audio track. Check "Share audio".');
       }
       const audioOnlyStream = new MediaStream([audioTracks[0]]);
+
+      // We don't need the video track, stop it to save resources
       stream.getVideoTracks().forEach((track) => track.stop());
+
       return audioOnlyStream;
     } catch (error: any) {
       if (error.name === "NotAllowedError")
@@ -117,47 +173,7 @@ export function useRecording() {
     }
   }
 
-  // --- 2. UPDATED SEND AUDIO CHUNK ---
-  // Since we use start(1000), we don't need requestData() here.
-  // We just empty the buffer that is filling up automatically.
-  const sendAudioChunk = useCallback(async () => {
-    // Safety check: Don't send if we aren't recording
-    if (!store.sessionId || store.status !== "recording") return;
-
-    const currentChunks = chunksBufferRef.current;
-
-    if (currentChunks.length > 0) {
-      console.log(
-        `📤 Sending chunk #${store.chunksSent} (${currentChunks.length} fragments)`
-      );
-
-      // Create Blob
-      const webmBlob = new Blob(currentChunks, {
-        type: "audio/webm;codecs=opus",
-      });
-
-      // Clear buffer IMMEDIATELY to start collecting next chunk
-      chunksBufferRef.current = [];
-
-      // Convert and Emit
-      const arrayBuffer = await webmBlob.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-
-      try {
-        await emit("audio-chunk", {
-          sessionId: store.sessionId,
-          chunk: Array.from(new Uint8Array(buffer)),
-          chunkIndex: store.chunksSent,
-          timestamp: store.elapsedTime,
-        });
-        store.incrementChunksSent();
-      } catch (error) {
-        console.error("❌ Send error:", error);
-      }
-    }
-  }, [emit, store]);
-
-  // --- STOP RECORDING ---
+  // --- 5. STOP RECORDING ---
   const stopRecording = useCallback(async () => {
     try {
       console.log("🛑 Stopping recording...");
@@ -180,7 +196,7 @@ export function useRecording() {
 
       if (store.sessionId) {
         try {
-          const response = await emit("stop-recording", {
+          const response: any = await emit("stop-recording", {
             sessionId: store.sessionId,
             duration: store.elapsedTime,
           });
@@ -201,9 +217,9 @@ export function useRecording() {
       audioStreamRef.current = null;
       chunksBufferRef.current = [];
     }
-  }, [emit, store, sendAudioChunk]);
+  }, [emit, store, sendAudioChunk]); // Added sendAudioChunk dependency
 
-  // --- 3. UPDATED START RECORDING ---
+  // --- 6. START RECORDING ---
   const startRecording = useCallback(
     async (source: "MIC" | "TAB_SHARE" = "MIC") => {
       try {
@@ -234,18 +250,22 @@ export function useRecording() {
         const mimeType = MediaRecorder.isTypeSupported("audio/webm")
           ? "audio/webm"
           : "audio/ogg";
+
         const mediaRecorder = new MediaRecorder(stream, { mimeType });
         mediaRecorderRef.current = mediaRecorder;
         chunksBufferRef.current = [];
 
-        // Simple data collection - fires every 1s due to start(1000)
+        // Collect data
         mediaRecorder.ondataavailable = (event) => {
           if (event.data.size > 0) {
             chunksBufferRef.current.push(event.data);
           }
         };
 
-        const response: any = await emit("start-recording", { source });
+        const response: any = await emit("start-recording", {
+          source,
+          title: "New Recording",
+        });
 
         if (response.success) {
           store.setSessionId(response.sessionId);
@@ -254,17 +274,12 @@ export function useRecording() {
           store.startTimer();
           store.clearTranscripts();
 
-          // CRITICAL CHANGE: start(1000)
-          // This splits audio into 1-second blobs automatically.
-          // This makes the buffer logic much smoother than manual requestData()
+          // Slice audio every 1000ms (1 second)
           mediaRecorder.start(1000);
           console.log("🎙️ Recording started (1s timeslice)");
 
-          // CRITICAL CHANGE: Single Timer Logic
-          // We removed the conflicting setTimeout.
-          // This interval fires every 18s.
+          // Send accumulated chunks every 5 seconds
           chunkTimerRef.current = setInterval(() => {
-            // We check status to be safe, though clearInterval should handle it
             if (store.status === "recording") {
               sendAudioChunk();
             }
@@ -282,6 +297,7 @@ export function useRecording() {
     [emit, store, requestPermission, isConnected, sendAudioChunk, stopRecording]
   );
 
+  // --- 7. PAUSE / RESUME ---
   const pauseRecording = useCallback(async () => {
     if (!store.sessionId) return;
     if (mediaRecorderRef.current?.state === "recording")
@@ -307,11 +323,12 @@ export function useRecording() {
     store.resumeTimer();
   }, [emit, store, sendAudioChunk]);
 
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (chunkTimerRef.current) clearInterval(chunkTimerRef.current);
-      // Optional: stop recording on unmount
-      if (store.status === "recording") stopRecording();
+      // Optional: don't automatically stop on unmount if you want background recording,
+      // but usually safer to stop.
     };
   }, []);
 

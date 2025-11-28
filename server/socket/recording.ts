@@ -10,14 +10,13 @@ import {
   generateSummary,
   setSocketIOInstance,
 } from "../services/audioProcessor";
-import { PrismaClient } from "@prisma/client";
+import { db } from "../db"; // 👈 Use the singleton!
 
 interface StartRecordingData {
   source: "MIC" | "TAB_SHARE";
   title?: string;
 }
 
-// UPDATE: Chunk comes as number[] from client's Array.from(Uint8Array)
 interface AudioChunkData {
   sessionId: string;
   chunk: number[];
@@ -29,70 +28,117 @@ interface SessionControlData {
   sessionId: string;
 }
 
-const prisma = new PrismaClient();
-
 export function registerRecordingHandlers(io: SocketIOServer, socket: Socket) {
-  // Initialize audio service with IO instance for potential callbacks
+  // Initialize audio service with IO instance
   setSocketIOInstance(io);
 
   // --- START RECORDING ---
-  socket.on("start-recording", async (data: StartRecordingData, callback) => {
+  socket.on("start-recording", async (data, callback) => {
     try {
-      const userId = socket.data.userId;
-      const { source, title } = data;
+      const userId = socket.data.userId || socketUser?.id;
+      if (!userId) throw new Error("User not authenticated");
+
+      let { source, title, isTabAudio } = data;
+
+      if (!source && isTabAudio) {
+        source = "TAB_AUDIO"; // Or whatever your RecordingSource enum value is
+      }
 
       const session = await createSession(userId, source, title);
 
-      socket.join(`session-${session.id}`);
-      socket.data.currentSessionId = session.id;
+      const sessionId = session.id;
+      socket.data.currentSessionId = sessionId;
+      const roomName = `session-${sessionId}`;
+
+      socket.join(roomName);
+
+      if (!socket.rooms.has(roomName)) {
+        console.error(
+          `❌ Critical: Socket ${socket.id} failed to join ${roomName}`
+        );
+        throw new Error(`Failed to establish session room connection.`);
+      }
 
       console.log(
-        `🎙️ Recording started: Session ${session.id} by user ${userId}`
+        `🎙️ Recording started: Session ${sessionId} by user ${userId} in room ${roomName}`
       );
+
+      socket.to(roomName).emit("recording-status", {
+        status: "RECORDING",
+        sessionId: sessionId,
+        startTime: new Date(),
+        title: title,
+      });
 
       callback({
         success: true,
-        sessionId: session.id,
-        session,
-      });
-
-      io.to(`session-${session.id}`).emit("recording-status", {
-        status: "RECORDING",
-        sessionId: session.id,
-        timestamp: new Date(),
+        sessionId: sessionId,
+        session: session,
       });
     } catch (error) {
-      console.error("Error starting recording:", error);
+      console.error("❌ Start recording failed:", error);
+
+      // Clean up socket state if we failed halfway through
+      delete socket.data.currentSessionId;
+
       callback({
         success: false,
         error:
-          error instanceof Error ? error.message : "Failed to start recording",
+          error instanceof Error
+            ? error.message
+            : "Unknown error starting recording",
       });
     }
   });
 
-  // --- AUDIO CHUNK HANDLER (ADDED) ---
+  // --- AUDIO CHUNK HANDLER (WITH RECOVERY) ---
   socket.on("audio-chunk", async (data: AudioChunkData, callback) => {
     try {
       const { sessionId, chunk, chunkIndex, timestamp } = data;
 
-      // 1. Security Check
+      // 1. Session Mismatch & Recovery Check
       if (socket.data.currentSessionId !== sessionId) {
         console.warn(
-          `⚠️ Session mismatch: Socket ${socket.data.currentSessionId} vs Chunk ${sessionId}`
+          `⚠️ Socket memory lost for Session ${sessionId}. Checking DB...`
         );
-        throw new Error("Session ID mismatch");
+
+        const session = await db.recordingSession.findUnique({
+          where: { id: sessionId },
+          select: { userId: true, status: true },
+        });
+
+        // ✅ FIX: Ensure specific user ID source and force String comparison
+        const socketUserId = socket.data.userId || socketUser?.id;
+
+        // We use String(...).trim() to handle ObjectId vs String differences
+        const isUserMatch =
+          String(session?.userId).trim() === String(socketUserId).trim();
+
+        if (
+          session &&
+          isUserMatch &&
+          (session.status === "RECORDING" || session.status === "PAUSED")
+        ) {
+          console.log(
+            `✅ Session recovered! Re-attaching socket to ${sessionId}`
+          );
+
+          socket.data.currentSessionId = sessionId;
+          socket.data.userId = socketUserId; // Re-save user ID to memory
+          socket.join(`session-${sessionId}`);
+        } else {
+          console.error(
+            `❌ Recovery failed. User '${socketUserId}' vs Session User '${session?.userId}'`
+          );
+          throw new Error("Session ID mismatch or invalid session");
+        }
       }
 
-      console.log(
-        `📥 [LIVE] Chunk ${chunkIndex}: ${chunk.length} bytes (Session: ${sessionId})`
-      );
+      // ... Rest of your code (Buffer conversion, processing, etc.) remains the same ...
+      console.log(`📥 [LIVE] Chunk ${chunkIndex}: ${chunk.length} bytes`);
 
-      // 2. Convert Array back to Buffer
-      // The client sends a regular array (from Uint8Array), Node needs a Buffer
       const buffer = Buffer.from(new Uint8Array(chunk));
 
-      // 3. Process audio (STT Service)
       const transcription = await processAudioChunk(
         sessionId,
         buffer,
@@ -100,8 +146,6 @@ export function registerRecordingHandlers(io: SocketIOServer, socket: Socket) {
         timestamp
       );
 
-      // 4. Broadcast result to client
-      // Event name must match client's 'useRecording' hook: "transcription-update"
       io.to(`session-${sessionId}`).emit("transcription-update", {
         sessionId,
         chunkIndex,
@@ -110,28 +154,11 @@ export function registerRecordingHandlers(io: SocketIOServer, socket: Socket) {
         confidence: transcription.confidence || 0.95,
       });
 
-      console.log(`📤 [LIVE] Emitted transcription for chunk ${chunkIndex}`);
-
-      // 5. Acknowledge receipt
       if (callback) callback({ success: true });
     } catch (error) {
+      // ... Error handling remains the same ...
       console.error(`❌ Chunk ${data.chunkIndex} failed:`, error);
-
-      // Log error to DB but don't crash
-      if (data.sessionId) {
-        await logError(data.sessionId, "AUDIO_PROCESSING_ERROR", error);
-      }
-
-      // Notify client logic of failure (optional, but good practice)
-      if (callback) {
-        callback({
-          success: false,
-          error:
-            error instanceof Error
-              ? error.message
-              : "Failed to process audio chunk",
-        });
-      }
+      if (callback) callback({ success: false, error: error.message });
     }
   });
 
@@ -189,82 +216,95 @@ export function registerRecordingHandlers(io: SocketIOServer, socket: Socket) {
   socket.on(
     "stop-recording",
     async (data: SessionControlData & { duration: number }, callback) => {
+      const { sessionId, duration } = data;
+
       try {
-        const { sessionId, duration } = data;
+        const existingSession = await db.recordingSession.findUnique({
+          where: { id: sessionId },
+          select: { status: true },
+        });
+
+        if (!existingSession) {
+          throw new Error("Session not found");
+        }
+
+        if (
+          existingSession.status === "PROCESSING" ||
+          existingSession.status === "COMPLETED"
+        ) {
+          console.log(`⚠️ Ignored duplicate stop request for ${sessionId}`);
+          callback({ success: true }); // Tell client "it's fine" so it stops retrying
+          return;
+        }
 
         console.log(
           `🛑 Recording stopped: Session ${sessionId}, Duration: ${duration}s`
         );
 
-        // Update session status and duration
         await updateSessionStatus(sessionId, "PROCESSING");
         await updateSessionDuration(sessionId, duration);
 
-        // Notify client processing started
         io.to(`session-${sessionId}`).emit("recording-status", {
           status: "PROCESSING",
           sessionId,
           timestamp: new Date(),
         });
 
-        // Generate summary in background (don't block response)
+        // Background Summary Generation
         (async () => {
           try {
             console.log(
               `🤖 Starting summary generation for session ${sessionId}...`
             );
 
-            // Get all transcripts for this session
-            const transcripts = await prisma.transcript.findMany({
+            // USE SINGLETON DB HERE
+            const transcripts = await db.transcript.findMany({
               where: { sessionId },
               orderBy: { chunkIndex: "asc" },
             });
 
-            // Combine transcripts
             const fullTranscript = transcripts.map((t) => t.text).join(" ");
 
             console.log(
               `📝 Full transcript length: ${fullTranscript.length} characters`
             );
 
-            // Generate summary using Gemini
             const summaryData = await generateSummary(
               sessionId,
               fullTranscript
             );
 
-            // Save summary to database
-            await prisma.summary.create({
-              data: {
-                sessionId,
-                fullSummary: summaryData.fullSummary,
-                keyPoints: summaryData.keyPoints,
-                actionItems: summaryData.actionItems,
-                decisions: summaryData.decisions,
-              },
-            });
+            // Transaction ensures consistency
+            await db.$transaction(async (tx) => {
+              await tx.summary.create({
+                data: {
+                  sessionId,
+                  fullSummary: summaryData.fullSummary,
+                  keyPoints: summaryData.keyPoints,
+                  actionItems: summaryData.actionItems,
+                  decisions: summaryData.decisions,
+                },
+              });
 
-            // Update session with full transcript and mark completed
-            await prisma.recordingSession.update({
-              where: { id: sessionId },
-              data: {
-                fullTranscript,
-                status: "COMPLETED",
-              },
+              await tx.recordingSession.update({
+                where: { id: sessionId },
+                data: {
+                  fullTranscript,
+                  status: "COMPLETED",
+                },
+              });
             });
 
             console.log(
               `✅ Summary generated and saved for session ${sessionId}`
             );
 
-            // Notify client that processing is complete
             io.to(`session-${sessionId}`).emit("recording-status", {
               status: "COMPLETED",
               sessionId,
               timestamp: new Date(),
             });
 
-            // Send summary to client
             io.to(`session-${sessionId}`).emit("summary-generated", {
               sessionId,
               summary: summaryData,
@@ -275,7 +315,6 @@ export function registerRecordingHandlers(io: SocketIOServer, socket: Socket) {
               summaryError
             );
 
-            // Mark as completed even if summary fails (so UI doesn't hang)
             await updateSessionStatus(sessionId, "COMPLETED");
             await logError(sessionId, "SUMMARY_GENERATION_ERROR", summaryError);
 
@@ -290,10 +329,8 @@ export function registerRecordingHandlers(io: SocketIOServer, socket: Socket) {
         callback({ success: true });
       } catch (error) {
         console.error("Error stopping recording:", error);
-
-        if (data.sessionId) {
+        if (data.sessionId)
           await logError(data.sessionId, "STOP_RECORDING_ERROR", error);
-        }
 
         callback({
           success: false,
@@ -313,12 +350,12 @@ export function registerRecordingHandlers(io: SocketIOServer, socket: Socket) {
         `⚠️ Client disconnected during recording: Session ${sessionId}`
       );
 
-      // Only mark failed if it was actively recording,
-      // avoiding overwriting COMPLETED status if they disconnect right after stop
       try {
-        const currentSession = await prisma.recordingSession.findUnique({
+        // USE SINGLETON DB
+        const currentSession = await db.recordingSession.findUnique({
           where: { id: sessionId },
         });
+
         if (
           currentSession?.status === "RECORDING" ||
           currentSession?.status === "PAUSED"

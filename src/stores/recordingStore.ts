@@ -127,11 +127,24 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
     }
   },
 
+  // ✅ FIX: Prevent duplicates here
   addTranscriptChunk: (chunk) =>
     set((state) => {
+      // 1. Check if we already have this chunkIndex
+      const exists = state.transcriptChunks.some(
+        (c) => c.chunkIndex === chunk.chunkIndex
+      );
+
+      // 2. If it exists, ignore it (return current state)
+      if (exists) {
+        return state;
+      }
+
+      // 3. If new, add it and sort
       const newChunks = [...state.transcriptChunks, chunk].sort(
         (a, b) => a.chunkIndex - b.chunkIndex
       );
+
       const fullTranscript = newChunks.map((c) => c.text).join(" ");
 
       return {

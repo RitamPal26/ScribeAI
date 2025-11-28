@@ -118,9 +118,16 @@ export function RecordingControls() {
           variant="destructive"
           className="flex-1 h-14 sm:h-16 text-base sm:text-lg"
           onClick={handleStop}
+          // 👇 ADD THIS LINE TO PREVENT DOUBLE-CLICKS
+          disabled={status === "processing" || status === "completed"}
         >
-          <Square className="w-5 h-5 sm:w-6 sm:h-6 mr-2" />
-          Stop
+          {status === "processing" ? (
+            // Optional: Show a spinner while processing
+            <Loader2 className="w-5 h-5 sm:w-6 sm:h-6 mr-2 animate-spin" />
+          ) : (
+            <Square className="w-5 h-5 sm:w-6 sm:h-6 mr-2 fill-current" />
+          )}
+          {status === "processing" ? "Processing..." : "Stop"}
         </Button>
       </div>
     );
