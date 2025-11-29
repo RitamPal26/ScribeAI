@@ -2,7 +2,7 @@
 
 > Real-time audio transcription and AI-powered meeting summaries using Next.js, Socket.io, and Google Gemini
 
-[Demo Video](#)
+[Demo Video](https://www.loom.com/share/af17a48dd9c54cba9b2d20e8154f9449)
 
 ---
 
@@ -81,19 +81,26 @@ cd ScribeAI
 pnpm install
 ```
 
-3. **Configure Environment Variables**
+3. **Setup Database**
+
+   a. **Create Supabase Project:**
+   - Go to [Supabase Dashboard](https://supabase.com/dashboard)
+   - Click "New Project"
+   - Choose a name and set a secure database password
+   - Wait for project initialization (~2 minutes)
+
+   b. **Get Database URL:**
+   - Go to **Project Settings** → **Database**
+   - Scroll to **Connection String** section
+   - Copy the **Connection pooling** URI (recommended for production)
+   - Format: `postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres`
+
+4. **Configure Environment Variables**
+
 ```
 cp .env.example .env
 ```
-
-4. **Setup Database**
-```
-# Push Prisma schema to database
-pnpm prisma db push
-
-# (Optional) Seed with sample data
-pnpm prisma db seed
-```
+And put in all the required varibles
 
 5. **Start Development Server**
 ```
@@ -198,7 +205,7 @@ For complete system architecture, data flow diagrams, and technical decisions:
 
 ## Demo Video
 
-[📹 Watch Full Walkthrough (5 min)](https://youtu.be/YOUR_VIDEO_ID)
+[📹 Watch Full Walkthrough](https://www.loom.com/share/af17a48dd9c54cba9b2d20e8154f9449)
 
 **Demonstration includes:**
 - ✅ Microphone recording with live transcription

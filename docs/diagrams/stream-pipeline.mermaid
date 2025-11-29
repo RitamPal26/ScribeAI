@@ -1,0 +1,34 @@
+sequenceDiagram
+    participant User
+    participant Browser
+    participant MediaRecorder
+    participant SocketIO
+    participant Server
+    participant Gemini
+    participant Database
+
+    User->>Browser: Click "Start Recording"
+    Browser->>MediaRecorder: getUserMedia() / getDisplayMedia()
+    Note over MediaRecorder: Capture audio in 5s chunks
+    
+    loop Every 5 seconds
+        MediaRecorder->>SocketIO: Send audio chunk (WebM)
+        SocketIO->>Server: audio-chunk event
+        Server->>Server: Validate session & user
+        Server->>Gemini: POST audio for transcription
+        Note over Gemini: Process audio (~500ms)
+        Gemini-->>Server: Return transcribed text
+        Server->>Database: Save transcript chunk
+        Server->>SocketIO: transcription_update event
+        SocketIO-->>Browser: Display live text in UI
+    end
+    
+    User->>Browser: Click "Stop Recording"
+    Browser->>SocketIO: stop-recording event
+    Server->>Database: Fetch full transcript
+    Server->>Gemini: Generate AI summary
+    Note over Gemini: Summarize with key points
+    Gemini-->>Server: Return summary JSON
+    Server->>Database: Update session with summary
+    Server->>SocketIO: session-completed event
+    Browser->>User: Navigate to summary page
